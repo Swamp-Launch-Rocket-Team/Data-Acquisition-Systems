@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ESP32 Multi-Sensor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<h2>ESP32 Multi-Sensor Dashboard</h2>
+
+Duration (seconds):
+<input type="number" id="duration" value="10">
+<button onclick="startRecording()">Start Recording</button>
+
+<br><br>
+
+<button onclick="sendCommand('TARE')">TARE</button>
+
+<canvas id="chart" width="800" height="400"></canvas>
+
+<script>
+var gateway = "ws://192.168.1.126:81/";
+var websocket = new WebSocket(gateway);
+
+let recording = false;
+let recordEndTime = 0;
+let recordedData = [];
+
+const ctx = document.getElementById('chart').getContext('2d');
+
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: 'A1',
+        data: [],
+        borderColor: 'blue',
+        fill: false
+      },
+      {
+        label: 'A2',
+        data: [],
+        borderColor: 'red',
+        fill: false
+      },
+      {
+        label: 'B1',
+        data: [],
+        borderColor: 'green',
+        fill: false
+      },
+      {
+        label: 'B2',
+        data: [],
+        borderColor: 'orange',
+        fill: false
+      }
+    ]
+  },
+  options: {
+    animation: false,
+    responsive: true,
+    scales: {
+      y: {
+        beginAtZero: false
+      }
+    }
+  }
+});
+
+websocket.onmessage = function(event) {
+
+  let data = JSON.parse(event.data);
+
+  let time = data.time;
+  let s1 = data.A1;
+  let s2 = data.A2;
+  let s3 = data.B1;
+  let s4 = data.B2;
+
+  chart.data.labels.push(time);
+  chart.data.datasets[0].data.push(s1);
+  chart.data.datasets[1].data.push(s2);
+  chart.data.datasets[2].data.push(s3);
+  chart.data.datasets[3].data.push(s4);
+
+  if (chart.data.labels.length > 100) {
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+    chart.data.datasets[1].data.shift();
+    chart.data.datasets[2].data.shift();
+    chart.data.datasets[3].data.shift();
+  }
+
+  chart.update();
+
+  if (recording) {
+    recordedData.push([time, s1, s2, s3, s4]);
+
+    if (Date.now() > recordEndTime) {
+      recording = false;
+      downloadCSV();
+    }
+  }
+};
+
+function sendCommand(cmd) {
+  websocket.send(cmd);
+}
+
+function startRecording() {
+  let duration = parseInt(document.getElementById("duration").value);
+  recordedData = [];
+  recording = true;
+  recordEndTime = Date.now() + duration * 1000;
+}
+
+function downloadCSV() {
+
+  let csv = "Time(ms),A1,A2,B1,B2\n";
+
+  recordedData.forEach(row => {
+    csv += row.join(",") + "\n";
+  });
+
+  let blob = new Blob([csv], { type: "text/csv" });
+  let url = URL.createObjectURL(blob);
+
+  let a = document.createElement("a");
+  a.href = url;
+  a.download = "esp32_data.csv";
+  a.click();
+
+  URL.revokeObjectURL(url);
+}
+</script>
+
+</body>
+</html>
