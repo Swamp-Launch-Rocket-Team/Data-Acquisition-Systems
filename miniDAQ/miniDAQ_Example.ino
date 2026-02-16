@@ -27,6 +27,7 @@ Adafruit_NAU7802 nauB; // Sensor on Custom I2C  (B1, B2)
 
 // --- HELPER FUNCTIONS ---
 
+// Appends a string to the SD card file
 void appendFile(fs::FS &fs, const char *path, const char *message) {
   File file = fs.open(path, FILE_APPEND);
   if (!file) {
@@ -39,6 +40,7 @@ void appendFile(fs::FS &fs, const char *path, const char *message) {
   file.close();
 }
 
+// Reads a channel and flushes stale data
 int32_t readChannel(Adafruit_NAU7802 &sensor, uint8_t channel) {
   sensor.setChannel(channel);
   // Flush 5 readings to let the ADC settle after channel switch
@@ -51,20 +53,49 @@ int32_t readChannel(Adafruit_NAU7802 &sensor, uint8_t channel) {
   return sensor.read();
 }
 
+// Robust Initialization Function with Retries
+bool initSensorWithRetry(Adafruit_NAU7802 &sensor, TwoWire *bus, const char* sensorName, int maxRetries = 5) {
+  int attempts = 0;
+  
+  while (attempts < maxRetries) {
+    if (sensor.begin(bus)) {
+      // If successful, configure the sensor
+      sensor.setLDO(NAU7802_3V0);
+      sensor.setGain(NAU7802_GAIN_128);
+      sensor.setRate(NAU7802_RATE_320SPS);
+      Serial.print("Sensor "); Serial.print(sensorName); Serial.println(" configured successfully.");
+      return true; // Success!
+    }
+    
+    attempts++;
+    Serial.print("Failed to find Sensor "); Serial.print(sensorName);
+    Serial.print(". Attempt "); Serial.print(attempts); Serial.print(" of "); Serial.println(maxRetries);
+    
+    // Wait a bit before trying again
+    delay(500); 
+  }
+  
+  return false; // Failed after all retries
+}
+
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n--- 4-Channel NAU7802 Logger ---");
+  
+  // Wait to let sensors time-out of any hanging I2C transactions
+  // This helps prevent "stuck bus" issues after pressing the EN button
+  delay(1000); 
+
+  Serial.println("\n--- 4-Channel NAU7802 SD Logger ---");
 
   // 1. Initialize SD Card
   if (!SD.begin(SD_CS)) {
-    Serial.println("SD Card Mount Failed! Check wiring.");
-    return;
+    Serial.println("CRITICAL: SD Card Mount Failed! Check wiring.");
+    while (1) delay(10); // Halt if SD fails
   }
   Serial.println("SD Card Initialized.");
 
   // Write CSV Header (only if file is new)
   if (!SD.exists(LOG_FILENAME)) {
-    // Header matches your labels: Time, A1, A2, B1, B2
     appendFile(SD, LOG_FILENAME, "Time_ms,A1,A2,B1,B2\n");
   }
 
@@ -72,25 +103,17 @@ void setup() {
   Wire.begin(); // Default I2C (21 SDA, 22 SCL)
   I2C_Custom.begin(SDA_CUSTOM, SCL_CUSTOM); // Custom I2C (33 SDA, 32 SCL)
 
-  // 3. Initialize Sensor A (Default I2C)
-  if (!nauA.begin(&Wire)) {
-    Serial.println("Failed to find NAU7802 'A' (Default Pins 21/22)");
+  // 3. Initialize Sensor A (Default I2C) with Retries
+  if (!initSensorWithRetry(nauA, &Wire, "A")) {
+    Serial.println("CRITICAL: Sensor A could not be initialized. Halting.");
     while (1) delay(10);
   }
-  nauA.setLDO(NAU7802_3V0);
-  nauA.setGain(NAU7802_GAIN_128);
-  nauA.setRate(NAU7802_RATE_320SPS);
-  Serial.println("Sensor A configured.");
 
-  // 4. Initialize Sensor B (Custom I2C)
-  if (!nauB.begin(&I2C_Custom)) {
-    Serial.println("Failed to find NAU7802 'B' (Custom Pins 33/32)");
+  // 4. Initialize Sensor B (Custom I2C) with Retries
+  if (!initSensorWithRetry(nauB, &I2C_Custom, "B")) {
+    Serial.println("CRITICAL: Sensor B could not be initialized. Halting.");
     while (1) delay(10);
   }
-  nauB.setLDO(NAU7802_3V0);
-  nauB.setGain(NAU7802_GAIN_128);
-  nauB.setRate(NAU7802_RATE_320SPS);
-  Serial.println("Sensor B configured.");
 
   Serial.println("Logging started...");
 }
@@ -100,12 +123,12 @@ void loop() {
   unsigned long timestamp = millis();
 
   // --- Read Sensor A (Default I2C) ---
-  valA1 = readChannel(nauA, 0); // Channel 0 -> Label A1
-  valA2 = readChannel(nauA, 1); // Channel 1 -> Label A2
+  valA1 = readChannel(nauA, 0); 
+  valA2 = readChannel(nauA, 1); 
 
   // --- Read Sensor B (Custom I2C) ---
-  valB1 = readChannel(nauB, 0); // Channel 0 -> Label B1
-  valB2 = readChannel(nauB, 1); // Channel 1 -> Label B2
+  valB1 = readChannel(nauB, 0); 
+  valB2 = readChannel(nauB, 1); 
 
   // --- Format Data for CSV ---
   String dataString = String(timestamp) + "," + 
@@ -118,7 +141,7 @@ void loop() {
   appendFile(SD, LOG_FILENAME, dataString.c_str());
 
   // --- Print to Serial ---
-  Serial.print("Time: "); Serial.print(timestamp);
+  Serial.print("Logged -> Time: "); Serial.print(timestamp);
   Serial.print(" | A1: "); Serial.print(valA1);
   Serial.print(" | A2: "); Serial.print(valA2);
   Serial.print(" | B1: "); Serial.print(valB1);
